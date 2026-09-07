@@ -10,6 +10,45 @@ code when lies are found so it drops into CI.
 See `kweli-BRIEF.md` (the original handoff brief) for the full design
 rationale. This file just covers what's built and what isn't yet.
 
+## Example
+
+Real output, unedited except for length, from a run against the public
+`https://hapi.fhir.org/baseR4` sandbox — a well-maintained reference
+server, not a vendor with something to hide, and it still has real gaps
+between what it claims and what it does:
+
+```
+$ kweli https://hapi.fhir.org/baseR4 --resources Patient,Observation,Condition,Encounter,MedicationRequest,DiagnosticReport,ServiceRequest,DocumentReference,CarePlan,Location
+
+kweli  https://hapi.fhir.org/baseR4   FHIR 4.0.1   software: HAPI FHIR Server 8.11.16-SNAPSHOT/7e7129efb5/2026-07-08
+
+Resource      Claimed  Verified  Rejected  Ignored  Untested
+CarePlan           144        29         0        0       115
+Condition          139        34         0        0       105
+DiagnosticReport      131        26         0        0       105
+DocumentReference      140        34         1        0       105
+Encounter          170        35         0        0       135
+Observation         166        44         1        2       119
+Patient             292        21         0        0       271
+...
+
+LIES (5)
+  DocumentReference?relationship=kweli-nonexistent-760110  REJECTED  400 searching relationship=kweli-nonexistent-760110
+  MedicationRequest?_include=MedicationRequest:medication  IGNORED  no entry with search.mode=include, despite a populated reference in the sample set
+  Observation?_include=Observation:encounter  IGNORED  no entry with search.mode=include, despite a populated reference in the sample set
+  Observation?code-value-string=kweli-nonexistent-781397  REJECTED  500 searching code-value-string=kweli-nonexistent-781397
+  Observation?date=2026-07-20  IGNORED (PARTIAL)  server filtered loosely: returned a different result set than the unfiltered baseline, but not every entry in it matches the searched value
+
+Claims 1626 · Verified 274 · Lies 5 · Untested 1347 · 2m59s · 1076 requests
+$ echo $?
+1
+```
+
+`Observation?code-value-string=...` returning a bare `500` instead of a
+clean empty result or a `400` is the kind of thing an integration engineer
+finds by hand with curl an hour into writing a client — kweli finds it in
+under three minutes, unattended, with a CI-friendly exit code attached.
+
 ## Status: Phase 1 (core) complete
 
 ```
@@ -55,12 +94,20 @@ Implemented:
 - **`--expect us-core` (Phase 3 "missing param" detection) is not
   implemented.** Same refusal-not-pretense treatment.
 - The curated search-param path table (`internal/sample/paths.go`) covers
-  ~55 params across 10 common resource types (Patient, Observation,
-  Condition, Encounter, Procedure, MedicationRequest, AllergyIntolerance,
-  Immunization, DiagnosticReport, Practitioner, Organization). The brief
-  calls for growing this as "Phase 1.5" — params outside the table still
-  get a definitive verdict via the nonsense-only query, they just can't
-  produce the stronger "every entry matched a real value" verification.
+  ~125 params across 26 resource types — the common base params plus
+  most of US Core's clinical and administrative resources (Patient,
+  Observation, Condition, Encounter, Procedure, MedicationRequest,
+  MedicationDispense, Medication, AllergyIntolerance, Immunization,
+  DiagnosticReport, DocumentReference, CarePlan, CareTeam, Goal,
+  ServiceRequest, Specimen, Device, Location, Coverage, Provenance,
+  QuestionnaireResponse, RelatedPerson, Practitioner, PractitionerRole,
+  Organization). Grown from the original ~55/10 by running against a real
+  server and watching which resource types stayed stuck at "untested"
+  (brief's "Phase 1.5"). Deliberately still missing: any telecom-family
+  param (see the comment in paths.go for why a wrong-typed guess is worse
+  than no table entry). Params outside the table still get a definitive
+  verdict via the nonsense-only query, they just can't produce the
+  stronger "every entry matched a real value" verification.
 
 ## Layout
 
