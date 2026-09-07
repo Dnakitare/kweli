@@ -16,6 +16,7 @@ import (
 	"github.com/Dnakitare/kweli/internal/model"
 	"github.com/Dnakitare/kweli/internal/probe"
 	"github.com/Dnakitare/kweli/internal/report"
+	"github.com/Dnakitare/kweli/internal/smart"
 )
 
 func main() {
@@ -35,6 +36,7 @@ func main() {
 		clientID        string
 		jwk             string
 		tokenURL        string
+		scope           string
 		resources       string
 		concurrency     int
 		rps             float64
@@ -50,10 +52,11 @@ func main() {
 	)
 
 	rootCmd.Flags().StringVar(&token, "token", "", "Bearer token for authentication")
-	rootCmd.Flags().BoolVar(&smartBackend, "smart-backend", false, "Use SMART Backend Services auth (Phase 2, not implemented)")
-	rootCmd.Flags().StringVar(&clientID, "client-id", "", "Client ID for SMART Backend Services (Phase 2, not implemented)")
-	rootCmd.Flags().StringVar(&jwk, "jwk", "", "JWK for SMART Backend Services (Phase 2, not implemented)")
-	rootCmd.Flags().StringVar(&tokenURL, "token-url", "", "Token URL for SMART Backend Services (Phase 2, not implemented)")
+	rootCmd.Flags().BoolVar(&smartBackend, "smart-backend", false, "Use SMART Backend Services auth (client_credentials + private_key_jwt)")
+	rootCmd.Flags().StringVar(&clientID, "client-id", "", "Client ID registered with the server (required with --smart-backend)")
+	rootCmd.Flags().StringVar(&jwk, "jwk", "", "Path to a private JWK/JWK Set file (required with --smart-backend)")
+	rootCmd.Flags().StringVar(&tokenURL, "token-url", "", "Token endpoint override (default: discover via .well-known/smart-configuration, then the CapabilityStatement's oauth-uris extension)")
+	rootCmd.Flags().StringVar(&scope, "scope", smart.DefaultScope, "OAuth scope to request with --smart-backend")
 	rootCmd.Flags().StringVar(&resources, "resources", "", "Comma-separated resource types to probe (empty = all)")
 	rootCmd.Flags().IntVar(&concurrency, "concurrency", 4, "Number of resources to probe concurrently")
 	rootCmd.Flags().Float64Var(&rps, "rps", 8, "Requests per second limit")
@@ -86,6 +89,7 @@ func runKweli(cmd *cobra.Command, args []string) error {
 	clientID, _ := cmd.Flags().GetString("client-id")
 	jwk, _ := cmd.Flags().GetString("jwk")
 	tokenURL, _ := cmd.Flags().GetString("token-url")
+	scope, _ := cmd.Flags().GetString("scope")
 	resources, _ := cmd.Flags().GetString("resources")
 	concurrency, _ := cmd.Flags().GetInt("concurrency")
 	rps, _ := cmd.Flags().GetFloat64("rps")
@@ -112,19 +116,40 @@ func runKweli(cmd *cobra.Command, args []string) error {
 		os.Exit(2)
 	}
 
-	// Check Phase 2/3 features
-	if smartBackend {
-		fmt.Fprintf(os.Stderr, "smart-backend auth is not implemented yet (Phase 2) — use --token\n")
-		os.Exit(2)
-	}
+	// Check Phase 3 (still unimplemented — refuse rather than pretend).
 	if expect != "" {
 		fmt.Fprintf(os.Stderr, "--expect is not implemented yet (Phase 3)\n")
 		os.Exit(2)
 	}
 
-	// Warn about unused SMART flags if set but smartBackend is false
-	if (clientID != "" || jwk != "" || tokenURL != "") && !smartBackend {
-		// Silently ignore for now; they're only checked if smartBackend is true
+	// Validate the SMART Backend Services flag combination before doing
+	// any network I/O, per the exit-2-before-probing-starts contract.
+	if smartBackend {
+		if token != "" {
+			fmt.Fprintf(os.Stderr, "--smart-backend and --token are mutually exclusive — pick one auth mode\n")
+			os.Exit(2)
+		}
+		if clientID == "" {
+			fmt.Fprintf(os.Stderr, "--smart-backend requires --client-id\n")
+			os.Exit(2)
+		}
+		if jwk == "" {
+			fmt.Fprintf(os.Stderr, "--smart-backend requires --jwk (path to a private JWK/JWK Set file)\n")
+			os.Exit(2)
+		}
+	} else if clientID != "" || jwk != "" || tokenURL != "" {
+		fmt.Fprintf(os.Stderr, "--client-id/--jwk/--token-url only apply with --smart-backend\n")
+		os.Exit(2)
+	}
+
+	var signingKey *smart.SigningKey
+	if smartBackend {
+		key, err := smart.LoadKey(jwk)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "loading --jwk: %v\n", err)
+			os.Exit(2)
+		}
+		signingKey = key
 	}
 
 	// Build context with budget timeout
@@ -165,6 +190,23 @@ func runKweli(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fetching /metadata: %v\n", err)
 		os.Exit(2)
+	}
+
+	// SMART Backend Services: /metadata itself is fetched unauthenticated
+	// above (it's meant to be publicly readable, and its own security
+	// extension is one of the ways to discover where to authenticate).
+	// Everything from here on needs a token, so rebuild cl with a
+	// TokenSource instead of reusing the unauthenticated one.
+	if smartBackend {
+		discoveredTokenURL, err := smart.DiscoverTokenURL(ctx, cl, cs, baseURL, tokenURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "discovering SMART token endpoint: %v\n", err)
+			os.Exit(2)
+		}
+		ts := smart.NewTokenSource(signingKey, clientID, discoveredTokenURL, scope)
+		clientCfg.Token = ""
+		clientCfg.TokenSource = ts.Token
+		cl = client.New(clientCfg)
 	}
 
 	// Run probes

@@ -49,7 +49,7 @@ clean empty result or a `400` is the kind of thing an integration engineer
 finds by hand with curl an hour into writing a client — kweli finds it in
 under three minutes, unattended, with a CI-friendly exit code attached.
 
-## Status: Phase 1 (core) complete
+## Status: Phase 1 (core) + Phase 2 (SMART Backend Services auth) complete
 
 ```
 go build -o kweli ./cmd/kweli
@@ -80,6 +80,18 @@ Implemented:
   `internal/probe/regression_test.go`), including a PHI leak in
   `--verbose` logging and a failed `vread` that was silently reported as
   a pass. See the git log for the full list.
+- **`--smart-backend`** (SMART Backend Services: `client_credentials` +
+  `private_key_jwt`, RS384/ES384, token discovery via
+  `.well-known/smart-configuration` with a fallback to the
+  CapabilityStatement's `oauth-uris` security extension, and token
+  caching/refresh) is implemented in `internal/smart`, with a
+  self-contained fixture (`internal/testserver/smart.go`) exercising the
+  whole flow end to end offline. Also validated against a real,
+  independent implementation: dynamically registered a client with
+  SMART Health IT's public bulk-data reference server
+  (`bulk-data.smarthealthit.org`), and its `/auth/token` endpoint verified
+  a real RS384-signed assertion built by this code and issued a genuine
+  access token — the brief's own Phase 2 validation step (§6).
 
 ## Tracked debt (named explicitly, not hidden)
 
@@ -89,8 +101,6 @@ Implemented:
   `$export` safely (and cancelling it) against a real production server is
   real engineering, not a Phase 1 shortcut — deferred on purpose. Flag
   exists so `--help` documents the future shape.
-- **`--smart-backend` (SMART Backend Services / `private_key_jwt`) is
-  Phase 2.** The CLI refuses to run rather than pretending the flag works.
 - **`--expect us-core` (Phase 3 "missing param" detection) is not
   implemented.** Same refusal-not-pretense treatment.
 - The curated search-param path table (`internal/sample/paths.go`) covers
@@ -116,10 +126,11 @@ cmd/kweli/          flag parsing, exit codes
 internal/model/      shared Finding/Report vocabulary (probe -> report contract)
 internal/capstmt/    minimal CapabilityStatement struct + parser
 internal/client/     http client: auth, rate limit, retry, redaction
+internal/smart/      SMART Backend Services: JWK loading, private_key_jwt, token discovery/exchange/caching
 internal/probe/      one file per probe kind (search, include, paging, read, count, system)
 internal/sample/     sample-resource fetch + curated path table (two-query test)
 internal/report/     text/json/markdown renderers
-internal/testserver/ httptest fake server with planted lies + truthful control
+internal/testserver/ httptest fake server with planted lies + truthful control, plus a SMART auth fixture
 ```
 
 ## Exit codes

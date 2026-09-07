@@ -3,6 +3,7 @@ package client_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,5 +144,58 @@ func TestGetURL_UsesAbsoluteLink(t *testing.T) {
 	}
 	if gotPath != "/Patient" {
 		t.Errorf("server saw path %q, want /Patient (GetURL must not prepend BaseURL)", gotPath)
+	}
+}
+
+func TestGet_TokenSourceTakesPriorityOverStaticToken(t *testing.T) {
+	var gotAuth string
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cl := client.New(client.Config{
+		BaseURL: srv.URL,
+		Token:   "static-token-should-be-ignored",
+		TokenSource: func(ctx context.Context) (string, error) {
+			calls++
+			return "dynamic-token", nil
+		},
+		RPS: 1000,
+	})
+	if _, err := cl.Get(context.Background(), "Patient"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if gotAuth != "Bearer dynamic-token" {
+		t.Errorf("Authorization = %q, want the TokenSource's token, not the static one", gotAuth)
+	}
+	if calls != 1 {
+		t.Errorf("TokenSource called %d times, want 1", calls)
+	}
+}
+
+func TestGet_TokenSourceErrorPropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should never have been contacted when TokenSource fails")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	wantErr := errors.New("token exchange failed")
+	cl := client.New(client.Config{
+		BaseURL: srv.URL,
+		TokenSource: func(ctx context.Context) (string, error) {
+			return "", wantErr
+		},
+		RPS: 1000,
+	})
+	_, err := cl.Get(context.Background(), "Patient")
+	if err == nil {
+		t.Fatal("expected an error when TokenSource fails")
+	}
+	if !strings.Contains(err.Error(), "token exchange failed") {
+		t.Errorf("error = %v, want it to wrap the TokenSource's error", err)
 	}
 }

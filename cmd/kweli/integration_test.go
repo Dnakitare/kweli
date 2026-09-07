@@ -8,11 +8,17 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
+	"encoding/json"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Dnakitare/kweli/internal/testserver"
 )
@@ -87,6 +93,79 @@ func TestIntegration_TruthfulServerExitCode(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "LIES (0)") {
 		t.Errorf("LIES section should be omitted entirely when there are none, got: %s", stdout.String())
+	}
+}
+
+func TestIntegration_SMARTBackendAuth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	bin := buildKweli(t)
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const clientID = "kweli-cli-test-client"
+	srv, stats := testserver.NewSMARTProtected(&priv.PublicKey, clientID, time.Hour)
+	defer srv.Close()
+
+	jwkPath := filepath.Join(t.TempDir(), "key.jwk.json")
+	jwk := map[string]any{
+		"kty": "RSA", "kid": "cli-test-kid", "alg": "RS384",
+		"n": base64.RawURLEncoding.EncodeToString(priv.N.Bytes()),
+		"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(priv.E)).Bytes()),
+		"d": base64.RawURLEncoding.EncodeToString(priv.D.Bytes()),
+		"p": base64.RawURLEncoding.EncodeToString(priv.Primes[0].Bytes()),
+		"q": base64.RawURLEncoding.EncodeToString(priv.Primes[1].Bytes()),
+	}
+	b, err := json.Marshal(jwk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(jwkPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(bin, srv.URL,
+		"--smart-backend", "--client-id", clientID, "--jwk", jwkPath,
+		"--resources", "Patient", "--format", "json", "--no-color")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			t.Fatalf("running kweli: %v (stderr: %s)", err, stderr.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), `"server"`) {
+		t.Fatalf("stdout doesn't look like the JSON report (stdout: %s) (stderr: %s)", stdout.String(), stderr.String())
+	}
+	if stats.TokenCalls() < 1 {
+		t.Error("kweli never actually exchanged a token — the SMART auth flow didn't run")
+	}
+}
+
+func TestIntegration_SMARTBackendRequiresClientIDAndJWK(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	bin := buildKweli(t)
+
+	var stderr bytes.Buffer
+	cmd := exec.Command(bin, "https://example.org/r4", "--smart-backend")
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected kweli to exit non-zero without --client-id/--jwk, got: %v", err)
+	}
+	if exitErr.ExitCode() != 2 {
+		t.Errorf("exit code = %d, want 2 (config failure before probing)", exitErr.ExitCode())
+	}
+	if !strings.Contains(stderr.String(), "--client-id") {
+		t.Errorf("stderr doesn't explain what's missing: %s", stderr.String())
 	}
 }
 

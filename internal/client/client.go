@@ -22,8 +22,15 @@ import (
 
 // Config configures a Client.
 type Config struct {
-	BaseURL     string        // e.g. "https://hapi.fhir.org/baseR4" (no trailing slash required — normalize it)
-	Token       string        // bearer token; empty means no Authorization header
+	BaseURL string // e.g. "https://hapi.fhir.org/baseR4" (no trailing slash required — normalize it)
+	Token   string // static bearer token; empty means no Authorization header unless TokenSource is set
+	// TokenSource, when set, is called before every request to obtain the
+	// current bearer token — used for SMART Backend Services, where the
+	// token is short-lived and refreshed mid-run (internal/smart.
+	// TokenSource.Token has this exact signature). Takes priority over
+	// Token when both are set. Expected to cache internally; the Client
+	// calls it on every request, not just when a token is missing.
+	TokenSource func(ctx context.Context) (string, error)
 	Timeout     time.Duration // per-request timeout; 0 means use a sane default (30s)
 	RPS         float64       // requests per second cap; 0 or negative means use a default (8)
 	Concurrency int           // advisory only, not enforced by Client itself (the caller uses errgroup); may be ignored
@@ -33,14 +40,15 @@ type Config struct {
 
 // Client is an HTTP client for FHIR servers with rate limiting, retry, and redaction.
 type Client struct {
-	baseURL    string
-	token      string
-	timeout    time.Duration
-	limiter    *rate.Limiter
-	verbose    bool
-	out        io.Writer
-	httpClient *http.Client
-	requestCnt atomic.Int64
+	baseURL     string
+	token       string
+	tokenSource func(ctx context.Context) (string, error)
+	timeout     time.Duration
+	limiter     *rate.Limiter
+	verbose     bool
+	out         io.Writer
+	httpClient  *http.Client
+	requestCnt  atomic.Int64
 }
 
 // Response is a fully-read HTTP response.
@@ -84,13 +92,14 @@ func New(cfg Config) *Client {
 	}
 
 	return &Client{
-		baseURL:    baseURL,
-		token:      cfg.Token,
-		timeout:    timeout,
-		limiter:    rate.NewLimiter(rate.Limit(rps), 1),
-		verbose:    cfg.Verbose,
-		out:        out,
-		httpClient: &http.Client{},
+		baseURL:     baseURL,
+		token:       cfg.Token,
+		tokenSource: cfg.TokenSource,
+		timeout:     timeout,
+		limiter:     rate.NewLimiter(rate.Limit(rps), 1),
+		verbose:     cfg.Verbose,
+		out:         out,
+		httpClient:  &http.Client{},
 	}
 }
 
@@ -191,8 +200,16 @@ func (c *Client) singleRequest(ctx context.Context, method, fullURL string, body
 
 	// Add standard headers.
 	req.Header.Set("Accept", "application/fhir+json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	token := c.token
+	if c.tokenSource != nil {
+		t, err := c.tokenSource(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("obtaining access token: %w", err)
+		}
+		token = t
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	// Set body if provided.
