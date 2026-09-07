@@ -46,9 +46,15 @@ func Text(w io.Writer, r *model.Report, color bool) error {
 	} else {
 		pagingParts := []string{}
 		for _, f := range pagingFindings {
-			if f.Status == model.StatusVerified {
+			switch {
+			case f.Status == model.StatusVerified:
 				pagingParts = append(pagingParts, fmt.Sprintf("OK (%s)", f.Resource))
-			} else {
+			case f.Status.IsUntestedCategory():
+				// A request failure or timeout mid-hop isn't a confirmed
+				// server defect (e.g. a run that hit --budget partway
+				// through paging) — don't call it "broken".
+				pagingParts = append(pagingParts, fmt.Sprintf("incomplete (%s: %s)", f.Resource, f.Detail))
+			default:
 				pagingParts = append(pagingParts, fmt.Sprintf("broken (%s: %s)", f.Resource, f.Detail))
 			}
 		}

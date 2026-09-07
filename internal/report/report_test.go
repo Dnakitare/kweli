@@ -477,3 +477,33 @@ func buildTestReport() *model.Report {
 		},
 	}
 }
+
+// TestText_PagingWordingDistinguishesTimeoutFromBrokenServer is a
+// regression test for a wording bug found running kweli against a real
+// server (hapi.fhir.org): a paging hop that failed because the run's own
+// --budget expired mid-request was labeled "broken", overstating what
+// actually happened. A genuinely broken server (404/loop) should still
+// say "broken"; a request failure/timeout should say "incomplete".
+func TestText_PagingWordingDistinguishesTimeoutFromBrokenServer(t *testing.T) {
+	r := &model.Report{
+		Server: "https://example.org", FHIRVersion: "4.0.1",
+		Findings: []model.Finding{
+			{ID: "A/paging", Resource: "A", Kind: model.KindPaging, Status: model.StatusRejected, Detail: "hop 1: 404 fetching next link"},
+			{ID: "B/paging", Resource: "B", Kind: model.KindPaging, Status: model.StatusUntested, Detail: "hop 1: request failed: context deadline exceeded"},
+		},
+	}
+	var buf bytes.Buffer
+	if err := Text(&buf, r, false); err != nil {
+		t.Fatalf("Text() error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "broken (A: hop 1: 404") {
+		t.Errorf("a genuinely broken (404) paging hop should say \"broken\": %s", out)
+	}
+	if !strings.Contains(out, "incomplete (B: hop 1: request failed: context deadline exceeded") {
+		t.Errorf("a timed-out paging hop should say \"incomplete\", not \"broken\": %s", out)
+	}
+	if strings.Contains(out, "broken (B:") {
+		t.Errorf("a timed-out paging hop must not be labeled \"broken\": %s", out)
+	}
+}
