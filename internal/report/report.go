@@ -219,7 +219,7 @@ func filterByLies(findings []model.Finding) []model.Finding {
 func filterByUntested(findings []model.Finding) []model.Finding {
 	var result []model.Finding
 	for _, f := range findings {
-		if f.Status == model.StatusUntested || f.Status == model.StatusInconclusive {
+		if f.Status.IsUntestedCategory() {
 			result = append(result, f)
 		}
 	}

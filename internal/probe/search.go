@@ -90,7 +90,7 @@ func testSearchParam(ctx context.Context, cl *client.Client, resourceType string
 
 	if havePositive {
 		f.Claim = fmt.Sprintf("%s?%s=%s", resourceType, p.Name, positiveValue)
-		path := fmt.Sprintf("%s?%s=%s&_count=50", resourceType, p.Name, url.QueryEscape(positiveValue))
+		path := fmt.Sprintf("%s?%s=%s&_count=50", resourceType, url.QueryEscape(p.Name), url.QueryEscape(positiveValue))
 		resp, err := cl.Get(ctx, path)
 		if err != nil {
 			f.Status, f.Detail = model.StatusUntested, fmt.Sprintf("request failed: %v", err)
@@ -142,15 +142,21 @@ func testSearchParam(ctx context.Context, cl *client.Client, resourceType string
 
 	// Step 3: nonsense query. Always run when step 2 didn't already
 	// resolve the claim (rejected / ignored-partial return early above).
+	// havePositive tells testNonsense whether a real-value query already
+	// ran and failed to resolve anything (zero results, or identical to
+	// the unfiltered baseline) — as opposed to never running at all
+	// because there was no table entry — since those two situations
+	// deserve different verdicts when the nonsense query also comes back
+	// empty (see the positiveRan branch below).
 	return testNonsense(ctx, cl, resourceType, p, baseline, randomSuffix, f, havePositive)
 }
 
-func testNonsense(ctx context.Context, cl *client.Client, resourceType string, p capstmt.SearchParam, baseline sample.Set, randomSuffix string, f model.Finding, weakOK bool) model.Finding {
+func testNonsense(ctx context.Context, cl *client.Client, resourceType string, p capstmt.SearchParam, baseline sample.Set, randomSuffix string, f model.Finding, positiveRan bool) model.Finding {
 	nonsense := sample.NonsenseValue(p.Type, resourceType, randomSuffix)
 	if f.Claim == "" {
 		f.Claim = fmt.Sprintf("%s?%s=%s", resourceType, p.Name, nonsense)
 	}
-	path := fmt.Sprintf("%s?%s=%s&_count=50", resourceType, p.Name, url.QueryEscape(nonsense))
+	path := fmt.Sprintf("%s?%s=%s&_count=50", resourceType, url.QueryEscape(p.Name), url.QueryEscape(nonsense))
 
 	resp, status, err := doSearch(ctx, cl, path)
 	if err != nil {
@@ -179,12 +185,23 @@ func testNonsense(ctx context.Context, cl *client.Client, resourceType string, p
 	entries := s.MatchEntries()
 
 	if len(entries) == 0 {
-		f.Status = model.StatusVerified
-		if weakOK {
-			f.Detail = "nonsense value returned 0 results, confirming the param has an effect"
-		} else {
+		if !positiveRan {
+			// No curated table entry for this param at all: the nonsense
+			// query is the only evidence we have, and it shows the param
+			// has *some* effect. Call it verified, but weakly.
+			f.Status = model.StatusVerified
 			f.Detail = "no curated sample value for this param; nonsense value returned 0 results (verified, weak)"
+			return f
 		}
+		// A positive query DID run (on a value pulled straight out of a
+		// real matching resource) and still didn't resolve the claim —
+		// either it also returned 0 (a real value should almost never
+		// return nothing for a working filter) or it matched the
+		// unfiltered baseline exactly (no visible effect). Either way,
+		// "nonsense also returns 0" doesn't confirm the param works; it's
+		// just as consistent with a filter that's broken for every input.
+		f.Status = model.StatusInconclusive
+		f.Detail = "a real extracted value didn't produce a clean verified/ignored result, and the nonsense value returned 0 results too — not enough to confirm the param actually works"
 		return f
 	}
 
@@ -201,10 +218,30 @@ func testNonsense(ctx context.Context, cl *client.Client, resourceType string, p
 				f.StatusCode = strictStatus
 				return f
 			}
-			if strictSet, err := sample.ParseBundle(resourceType, strictResp); err == nil && sample.SameIDs(baseline, strictSet) {
-				f.Status = model.StatusIgnored
-				f.Detail = "result set identical to unfiltered query, even under Prefer: handling=strict"
-				return f
+			if strictSet, perr := sample.ParseBundle(resourceType, strictResp); perr == nil {
+				strictEntries := strictSet.MatchEntries()
+				switch {
+				case len(strictEntries) == 0:
+					// Strict handling revealed the param actually filters
+					// (the nonsense value now returns nothing) even though
+					// default handling silently let it through.
+					f.Status = model.StatusVerified
+					f.StatusCode = strictStatus
+					f.Detail = "ignored under default handling, but a nonsense value returned 0 results under Prefer: handling=strict — the param does have an effect once strict handling is requested"
+					return f
+				case sample.SameIDs(baseline, strictSet):
+					f.Status = model.StatusIgnored
+					f.Detail = "result set identical to unfiltered query, even under Prefer: handling=strict"
+					return f
+				default:
+					// A different, non-empty, non-baseline-identical set
+					// under strict handling doesn't cleanly confirm either
+					// verdict — don't mislabel it as "identical".
+					f.Status = model.StatusInconclusive
+					f.StatusCode = strictStatus
+					f.Detail = "ignored under default handling; Prefer: handling=strict returned a different, non-empty result that doesn't cleanly confirm the param works or is ignored"
+					return f
+				}
 			}
 		}
 		f.Status = model.StatusIgnored

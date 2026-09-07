@@ -33,21 +33,18 @@ func skippableParam(p capstmt.SearchParam) bool {
 // probeResource runs the full §5.2 pipeline for one resource type,
 // sequentially (probes within a resource are not parallel; only different
 // resources run concurrently — see run.go).
-func probeResource(ctx context.Context, cl *client.Client, resourceType string, entry capstmt.ResourceEntry, nextSuffix func() string) resourceOutcome {
+func probeResource(ctx context.Context, cl *client.Client, resourceType string, entry capstmt.ResourceEntry, nextSuffix func() string, probeOperations bool) resourceOutcome {
 	out := resourceOutcome{summary: model.ResourceSummary{Resource: resourceType}}
 
 	add := func(f model.Finding) {
 		out.findings = append(out.findings, f)
 		out.summary.Claimed++
 		switch {
-		case f.Status.IsLie():
-			switch f.Status {
-			case model.StatusRejected, model.StatusRejectedStrict:
-				out.summary.Rejected++
-			default:
-				out.summary.Ignored++
-			}
-		case f.Status == model.StatusUntested || f.Status == model.StatusInconclusive:
+		case f.Status == model.StatusRejected:
+			out.summary.Rejected++
+		case f.Status == model.StatusIgnored || f.Status == model.StatusIgnoredPartial:
+			out.summary.Ignored++
+		case f.Status.IsUntestedCategory():
 			out.summary.Untested++
 		case f.Status == model.StatusVerified:
 			out.summary.Verified++
@@ -79,7 +76,23 @@ func probeResource(ctx context.Context, cl *client.Client, resourceType string, 
 			if s, err := sample.ParseBundle(resourceType, resp.Body); err == nil {
 				baseline = s
 				haveBaseline = true
+			} else {
+				add(model.Finding{
+					ID: resourceType + "/search", Resource: resourceType, Claim: resourceType + "?_count=50",
+					Kind: model.KindSearch, Status: model.StatusUntested, StatusCode: resp.StatusCode,
+					Detail: fmt.Sprintf("200 but body did not parse as a Bundle: %v", err),
+				})
 			}
+		} else {
+			// Any other status (500, 404, 400, ...) on the most basic
+			// possible request — a resource that claims search-type but
+			// can't even do an unfiltered search is a lie in its own
+			// right, not a silent "nothing to report".
+			add(model.Finding{
+				ID: resourceType + "/search", Resource: resourceType, Claim: resourceType + "?_count=50",
+				Kind: model.KindSearch, Status: model.StatusRejected, StatusCode: resp.StatusCode,
+				Detail: fmt.Sprintf("%d on the unfiltered search", resp.StatusCode),
+			})
 		}
 	}
 
@@ -90,7 +103,9 @@ func probeResource(ctx context.Context, cl *client.Client, resourceType string, 
 		if emptyBaseline {
 			// Per brief §5.2a: skip read entirely when there's no sample id.
 		} else {
-			add(probeRead(ctx, cl, resourceType, baseline, entry.HasInteraction("vread")))
+			for _, f := range probeRead(ctx, cl, resourceType, baseline, entry.HasInteraction("vread")) {
+				add(f)
+			}
 		}
 	}
 
@@ -133,6 +148,16 @@ func probeResource(ctx context.Context, cl *client.Client, resourceType string, 
 	// f. _count honoured
 	if canSearch && haveBaseline && !emptyBaseline {
 		add(testCount(ctx, cl, resourceType))
+	}
+
+	// Resource-scoped operations (e.g. Patient's $everything), same
+	// tracked-debt treatment as the system-level ones in system.go — see
+	// probeOperations for why these aren't actually exercised in Phase 1.
+	for _, op := range entry.Operation {
+		add(model.Finding{
+			ID: resourceType + "/operation/" + op.Name, Resource: resourceType, Claim: resourceType + "/{id}/$" + op.Name,
+			Kind: model.KindOperation, Status: model.StatusUntested, Detail: operationDetail(probeOperations),
+		})
 	}
 
 	return out

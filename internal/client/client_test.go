@@ -111,11 +111,11 @@ func TestVerbose_RedactsSensitiveParams(t *testing.T) {
 
 	var buf bytes.Buffer
 	cl := client.New(client.Config{BaseURL: srv.URL, RPS: 1000, Verbose: true, Out: &buf})
-	if _, err := cl.Get(context.Background(), "Patient?birthdate=1990-01-01&address-city=Nairobi&status=final"); err != nil {
+	if _, err := cl.Get(context.Background(), "Patient?birthdate=1990-01-01&address-city=Nairobi&status=final&family=Smith&given=Jane"); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	out := buf.String()
-	if strings.Contains(out, "1990-01-01") || strings.Contains(out, "Nairobi") {
+	if strings.Contains(out, "1990-01-01") || strings.Contains(out, "Nairobi") || strings.Contains(out, "Smith") || strings.Contains(out, "Jane") {
 		t.Errorf("verbose log leaked a sensitive value: %s", out)
 	}
 	if !strings.Contains(out, "REDACTED") {

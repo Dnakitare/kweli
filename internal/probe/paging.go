@@ -14,7 +14,12 @@ import (
 // repeats across hops (including the baseline page itself).
 func testPaging(ctx context.Context, cl *client.Client, resourceType string, baseline sample.Set) model.Finding {
 	id := resourceType + "/paging"
-	f := model.Finding{ID: id, Resource: resourceType, Kind: model.KindPaging, Category: "paging", Claim: resourceType + " paging"}
+	// Category is only set to "paging" on the broken-paging return paths
+	// below, never on the clean Verified one at the end — Finding.
+	// FailOnCategory() prefers a non-empty Category over the one derived
+	// from Status, so leaving it set unconditionally would make
+	// `--fail-on paging` fire even when paging works perfectly.
+	f := model.Finding{ID: id, Resource: resourceType, Kind: model.KindPaging, Claim: resourceType + " paging"}
 
 	seen := baseline.IDs()
 	link := baseline.NextLink
@@ -23,32 +28,32 @@ func testPaging(ctx context.Context, cl *client.Client, resourceType string, bas
 		resp, err := cl.GetURL(ctx, link)
 		hops++
 		if err != nil {
-			f.Status = model.StatusUntested
+			f.Status, f.Category = model.StatusUntested, "paging"
 			f.Detail = fmt.Sprintf("hop %d: request failed: %v", hops, err)
 			return f
 		}
 		f.Request, f.StatusCode = "GET "+link, resp.StatusCode
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			f.Status = model.StatusRejected
+			f.Status, f.Category = model.StatusRejected, "paging"
 			f.Detail = fmt.Sprintf("hop %d: %d fetching next link", hops, resp.StatusCode)
 			return f
 		}
 		s, err := sample.ParseBundle(resourceType, resp.Body)
 		if err != nil {
-			f.Status = model.StatusUntested
+			f.Status, f.Category = model.StatusUntested, "paging"
 			f.Detail = fmt.Sprintf("hop %d: 200 but body did not parse as a Bundle: %v", hops, err)
 			return f
 		}
 		for k := range s.IDs() {
 			if seen[k] {
-				f.Status = model.StatusIgnored
+				f.Status, f.Category = model.StatusIgnored, "paging"
 				f.Detail = fmt.Sprintf("hop %d repeats an entry from an earlier page (%s)", hops, k)
 				return f
 			}
 			seen[k] = true
 		}
 		if len(s.Entries) == 0 && s.NextLink != "" {
-			f.Status = model.StatusIgnored
+			f.Status, f.Category = model.StatusIgnored, "paging"
 			f.Detail = fmt.Sprintf("hop %d returned 0 entries but still advertised a next link", hops)
 			return f
 		}

@@ -48,16 +48,35 @@ func (s Status) IsLie() bool {
 	}
 }
 
-// FailOnCategory maps a Status to one of the --fail-on bucket names:
-// "rejected", "ignored", "paging", "untested". Statuses that are not
-// failures (verified, inconclusive, rejected (strict)) return "".
-func (s Status) FailOnCategory() string {
+// IsUntestedCategory reports whether a status belongs in the report's
+// "UNTESTED" bucket: StatusUntested and StatusInconclusive are the literal
+// "couldn't determine" cases, and StatusRejectedStrict joins them even
+// though it's a definitive, honest result (a server correctly refusing an
+// unsupported param under `Prefer: handling=strict` is not a lie) — it
+// still isn't "verified working" either, so it belongs in the same bucket
+// as the rest of "not a lie, not fully confirmed" rather than vanishing
+// from every count and section that isn't LIES. This is the single
+// definition every package (probe's tallies, report's UNTESTED section,
+// FailOnCategory's --fail-on bucket) uses, so they can't drift apart.
+func (s Status) IsUntestedCategory() bool {
 	switch s {
-	case StatusRejected:
+	case StatusUntested, StatusInconclusive, StatusRejectedStrict:
+		return true
+	default:
+		return false
+	}
+}
+
+// FailOnCategory maps a Status to one of the --fail-on bucket names:
+// "rejected", "ignored", "paging", "untested". Only StatusVerified returns
+// "" (fully confirmed, nothing to flag).
+func (s Status) FailOnCategory() string {
+	switch {
+	case s == StatusRejected:
 		return "rejected"
-	case StatusIgnored, StatusIgnoredPartial:
+	case s == StatusIgnored || s == StatusIgnoredPartial:
 		return "ignored"
-	case StatusUntested:
+	case s.IsUntestedCategory():
 		return "untested"
 	default:
 		return ""

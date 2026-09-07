@@ -98,7 +98,7 @@ func Run(ctx context.Context, cs *capstmt.CapabilityStatement, cl *client.Client
 		i, t := i, t
 		entry, _ := cs.FindResource(t)
 		g.Go(func() error {
-			outcomes[i] = probeResource(gctx, cl, t, entry, nextSuffix)
+			outcomes[i] = probeResource(gctx, cl, t, entry, nextSuffix, opts.ProbeOperations)
 			return nil
 		})
 	}
@@ -153,7 +153,7 @@ func summarize(findings []model.Finding) model.Summary {
 		switch {
 		case f.Status.IsLie():
 			s.Lies++
-		case f.Status == model.StatusUntested || f.Status == model.StatusInconclusive:
+		case f.Status.IsUntestedCategory():
 			s.Untested++
 		case f.Status == model.StatusVerified:
 			s.Verified++

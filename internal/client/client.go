@@ -271,6 +271,12 @@ func (c *Client) redactURL(rawURL string) string {
 		"telecom":    true,
 		"email":      true,
 		"phone":      true,
+		// family/given aren't in the brief's literal list but carry the
+		// same PHI as "name" — kweli's own path table (internal/sample/
+		// paths.go) builds real Patient?family=/given= queries, so they'd
+		// otherwise leak a real patient name in --verbose output.
+		"family": true,
+		"given":  true,
 	}
 
 	// Check for parameters starting with "address".

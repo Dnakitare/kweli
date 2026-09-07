@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/Dnakitare/kweli/internal/client"
@@ -36,23 +37,39 @@ func testInclude(ctx context.Context, cl *client.Client, resourceType, spec stri
 	claim := fmt.Sprintf("%s?%s=%s", resourceType, verb, spec)
 	f := model.Finding{ID: id, Resource: resourceType, Claim: claim, Kind: kind}
 
-	param := includeParam(spec)
-	populated := false
-	if param != "" {
-		for _, e := range baseline.MatchEntries() {
-			if _, ok := sample.Extract(resourceType, param, e.Resource); ok {
-				populated = true
-				break
+	// For a forward _include, spec's param (e.g. "subject" in
+	// "Condition:subject") belongs to resourceType itself, so we can check
+	// whether the sample set actually has a populated reference there
+	// before spending a request on it — an empty reference means we can't
+	// prove the server does anything (§5.2d).
+	//
+	// For _revinclude, spec's source type is the *other* resource (e.g.
+	// "Observation:patient" declared on Patient means "Observations
+	// referencing this patient via their own 'patient' param") — the
+	// param belongs to a resource type kweli isn't sampling here, so this
+	// precheck doesn't apply. Just run the query and, if nothing comes
+	// back, report untested rather than guessing it's a lie: we have no
+	// way to tell "no referencing resources exist" from "server ignores
+	// revinclude" without cross-resource-type sampling Phase 1 doesn't do.
+	if !rev {
+		param := includeParam(spec)
+		populated := false
+		if param != "" {
+			for _, e := range baseline.MatchEntries() {
+				if _, ok := sample.Extract(resourceType, param, e.Resource); ok {
+					populated = true
+					break
+				}
 			}
 		}
-	}
-	if !populated {
-		f.Status = model.StatusUntested
-		f.Detail = "no sample resource had a populated reference at this param"
-		return f
+		if !populated {
+			f.Status = model.StatusUntested
+			f.Detail = "no sample resource had a populated reference at this param"
+			return f
+		}
 	}
 
-	path := fmt.Sprintf("%s?_count=5&%s=%s", resourceType, verb, spec)
+	path := fmt.Sprintf("%s?_count=5&%s=%s", resourceType, verb, url.QueryEscape(spec))
 	resp, err := cl.Get(ctx, path)
 	if err != nil {
 		f.Status, f.Detail = model.StatusUntested, fmt.Sprintf("request failed: %v", err)
@@ -75,6 +92,11 @@ func testInclude(ctx context.Context, cl *client.Client, resourceType, spec stri
 			f.Detail = "at least one included entry present"
 			return f
 		}
+	}
+	if rev {
+		f.Status = model.StatusUntested
+		f.Detail = "no included entry came back; can't tell whether that's because no resource actually references this sample or because the server ignores _revinclude"
+		return f
 	}
 	f.Status = model.StatusIgnored
 	f.Detail = "no entry with search.mode=include, despite a populated reference in the sample set"
