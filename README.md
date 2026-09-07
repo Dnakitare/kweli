@@ -30,6 +30,17 @@ Implemented:
   from the brief's acceptance test, plus a truthful control. See
   `internal/probe/acceptance_test.go` — Phase 1 is done when kweli reports
   every planted defect and nothing else; it does.
+- Verified manually against `https://hapi.fhir.org/baseR4` (brief §6):
+  rate limiting held, budget expiry degraded gracefully (partial results
+  + a warning, nothing misreported as a lie), and it surfaced real
+  findings against a live production HAPI instance — a 500 on a nonsense
+  composite-param query, a loose date match, and a few `_include` misses
+  — alongside hundreds of correctly verified claims.
+- A deep-dive code review before the public push found and fixed 10 real
+  correctness bugs (each with a regression test in
+  `internal/probe/regression_test.go`), including a PHI leak in
+  `--verbose` logging and a failed `vread` that was silently reported as
+  a pass. See the git log for the full list.
 
 ## Tracked debt (named explicitly, not hidden)
 
