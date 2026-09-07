@@ -507,3 +507,85 @@ func TestText_PagingWordingDistinguishesTimeoutFromBrokenServer(t *testing.T) {
 		t.Errorf("a timed-out paging hop must not be labeled \"broken\": %s", out)
 	}
 }
+
+func missingReport() *model.Report {
+	return &model.Report{
+		Server: "https://example.org", FHIRVersion: "4.0.1",
+		Findings: []model.Finding{
+			{ID: "Coverage/expect", Resource: "Coverage", Claim: "Coverage", Kind: model.KindMissing, Status: model.StatusMissing,
+				Detail: "US Core 6.1 requires this resource type; the CapabilityStatement doesn't claim it at all"},
+			{ID: "Patient/expect/gender", Resource: "Patient", Claim: "Patient?gender=...", Kind: model.KindMissing, Status: model.StatusMissing,
+				Detail: "US Core 6.1 requires Patient search by \"gender\"; not present in the CapabilityStatement's searchParam list"},
+			{ID: "Patient/search/birthdate", Resource: "Patient", Claim: "Patient?birthdate=1990-01-01", Kind: model.KindSearch, Status: model.StatusVerified},
+		},
+		Summary: model.Summary{Claims: 1, Verified: 1, Missing: 2},
+	}
+}
+
+func TestText_MissingSection(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Text(&buf, missingReport(), false); err != nil {
+		t.Fatalf("Text() error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "MISSING (2)") {
+		t.Errorf("missing header not found: %s", out)
+	}
+	if !strings.Contains(out, "Coverage") || !strings.Contains(out, "Patient?gender=...") {
+		t.Errorf("missing findings not rendered: %s", out)
+	}
+	if !strings.Contains(out, "Missing 2") {
+		t.Errorf("summary line missing the Missing count: %s", out)
+	}
+}
+
+func TestText_NoMissingSectionWhenZero(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Text(&buf, buildTestReport(), false); err != nil {
+		t.Fatalf("Text() error: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "MISSING") {
+		t.Errorf("MISSING section should be entirely absent when Summary.Missing is 0: %s", out)
+	}
+	if strings.Contains(out, "· Missing") {
+		t.Errorf("summary line should not mention Missing when there are none: %s", out)
+	}
+}
+
+func TestMarkdown_MissingSection(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Markdown(&buf, missingReport()); err != nil {
+		t.Fatalf("Markdown() error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "### Missing") {
+		t.Errorf("missing heading not found: %s", out)
+	}
+	if !strings.Contains(out, "Coverage") {
+		t.Errorf("missing finding not rendered: %s", out)
+	}
+}
+
+func TestJSON_MissingRoundTrips(t *testing.T) {
+	var buf bytes.Buffer
+	if err := JSON(&buf, missingReport()); err != nil {
+		t.Fatalf("JSON() error: %v", err)
+	}
+	var got model.Report
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("round-trip unmarshal: %v", err)
+	}
+	if got.Summary.Missing != 2 {
+		t.Errorf("Summary.Missing = %d, want 2", got.Summary.Missing)
+	}
+	var sawMissingKind bool
+	for _, f := range got.Findings {
+		if f.Kind == model.KindMissing {
+			sawMissingKind = true
+		}
+	}
+	if !sawMissingKind {
+		t.Error("no finding round-tripped with Kind == missing")
+	}
+}

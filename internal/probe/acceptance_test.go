@@ -29,11 +29,19 @@ func fetchCapStmt(t *testing.T, cl *client.Client) *capstmt.CapabilityStatement 
 
 func runProbe(t *testing.T, baseURL string) *model.Report {
 	t.Helper()
+	return runProbeWithOptions(t, baseURL, probe.Options{Concurrency: 4, Seed: 42})
+}
+
+func runProbeWithOptions(t *testing.T, baseURL string, opts probe.Options) *model.Report {
+	t.Helper()
 	cl := client.New(client.Config{BaseURL: baseURL, RPS: 1000, Timeout: 5 * time.Second})
 	cs := fetchCapStmt(t, cl)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	report, err := probe.Run(ctx, cs, cl, probe.Options{Concurrency: 4, Seed: 42})
+	if opts.Concurrency == 0 {
+		opts.Concurrency = 4
+	}
+	report, err := probe.Run(ctx, cs, cl, opts)
 	if err != nil {
 		t.Fatalf("probe.Run: %v", err)
 	}
@@ -140,4 +148,88 @@ func TestAcceptance_TruthfulServer(t *testing.T) {
 	if report.Summary.Lies != 0 {
 		t.Errorf("report.Summary.Lies = %d, want 0", report.Summary.Lies)
 	}
+}
+
+// TestAcceptance_ExpectUSCore is Phase 3's acceptance test: the fixture's
+// CapabilityStatement only claims 9 resource types (out of US Core's
+// required set) and leaves several search params off the ones it does
+// claim, so --expect us-core should surface both flavors of gap — a
+// resource type never claimed at all, and a required param missing from
+// a resource type that IS claimed.
+func TestAcceptance_ExpectUSCore(t *testing.T) {
+	srv := testserver.New()
+	defer srv.Close()
+
+	report := runProbeWithOptions(t, srv.URL, probe.Options{Concurrency: 4, Seed: 42, Expect: "us-core"})
+
+	// Whole resource types the fixture never claims at all.
+	for _, rtype := range []string{"Coverage", "Device", "DocumentReference", "CarePlan", "CareTeam", "Location", "Organization", "Practitioner"} {
+		f := findingByID(t, report, rtype+"/expect")
+		if f.Status != model.StatusMissing {
+			t.Errorf("%s/expect: got status %q, want missing", rtype, f.Status)
+		}
+	}
+
+	// Resources the fixture DOES claim, but with required params absent.
+	missingParamCases := []struct{ id string }{
+		{"Patient/expect/_id"},
+		{"Patient/expect/gender"},
+		{"Patient/expect/identifier"},
+		{"Observation/expect/category"},
+		{"Observation/expect/date"},
+		{"Observation/expect/patient"},
+		{"Condition/expect/category"},
+		{"Condition/expect/patient"},
+		{"MedicationRequest/expect/intent"},
+		{"MedicationRequest/expect/patient"},
+		{"MedicationRequest/expect/status"},
+	}
+	for _, c := range missingParamCases {
+		f := findingByID(t, report, c.id)
+		if f.Status != model.StatusMissing {
+			t.Errorf("%s: got status %q, want missing", c.id, f.Status)
+		}
+	}
+
+	// Params the fixture DOES claim must not be reported missing.
+	for _, id := range []string{"Patient/expect/birthdate", "Patient/expect/name", "Observation/expect/code"} {
+		for _, f := range report.Findings {
+			if f.ID == id {
+				t.Errorf("%s should not exist — this param is claimed by the fixture", id)
+			}
+		}
+	}
+
+	if report.Summary.Missing == 0 {
+		t.Error("Summary.Missing should be non-zero under --expect us-core against this fixture")
+	}
+	if report.Summary.Missing != len(filterMissing(report.Findings)) {
+		t.Errorf("Summary.Missing = %d, want it to match the actual count of missing findings (%d)", report.Summary.Missing, len(filterMissing(report.Findings)))
+	}
+}
+
+// TestAcceptance_ExpectOffProducesNoMissingFindings confirms --expect is
+// truly opt-in: without it, no "missing" findings appear even though the
+// fixture is (by design) US-Core-incomplete.
+func TestAcceptance_ExpectOffProducesNoMissingFindings(t *testing.T) {
+	srv := testserver.New()
+	defer srv.Close()
+
+	report := runProbe(t, srv.URL) // no Expect set
+	if got := len(filterMissing(report.Findings)); got != 0 {
+		t.Errorf("got %d missing findings without --expect, want 0", got)
+	}
+	if report.Summary.Missing != 0 {
+		t.Errorf("Summary.Missing = %d without --expect, want 0", report.Summary.Missing)
+	}
+}
+
+func filterMissing(findings []model.Finding) []model.Finding {
+	var out []model.Finding
+	for _, f := range findings {
+		if f.Status == model.StatusMissing {
+			out = append(out, f)
+		}
+	}
+	return out
 }

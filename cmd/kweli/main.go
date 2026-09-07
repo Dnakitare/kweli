@@ -63,12 +63,12 @@ func main() {
 	rootCmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second, "Timeout for individual HTTP requests")
 	rootCmd.Flags().DurationVar(&budget, "budget", 5*time.Minute, "Total wall-clock budget for the run")
 	rootCmd.Flags().StringVar(&format, "format", "text", "Output format: text, json, or markdown")
-	rootCmd.Flags().StringVar(&failOn, "fail-on", "rejected,ignored", "Comma-separated failure categories: rejected, ignored, paging, untested")
+	rootCmd.Flags().StringVar(&failOn, "fail-on", "rejected,ignored", "Comma-separated failure categories: rejected, ignored, paging, untested, missing (missing only ever fires with --expect)")
 	rootCmd.Flags().BoolVar(&probeOperations, "probe-operations", false, "Probe operations like $everything and $export")
 	rootCmd.Flags().BoolVar(&noColor, "no-color", false, "Disable colored output")
 	rootCmd.Flags().BoolVar(&quiet, "quiet", false, "Suppress progress output (report still prints)")
 	rootCmd.Flags().BoolVar(&verbose, "verbose", false, "Verbose client logging")
-	rootCmd.Flags().StringVar(&expect, "expect", "", "Expected state (Phase 3, not implemented)")
+	rootCmd.Flags().StringVar(&expect, "expect", "", "Expectation table to check the CapabilityStatement against; only \"us-core\" is implemented")
 
 	if err := rootCmd.Execute(); err != nil {
 		// Cobra-level errors (missing base-url arg, unknown flag, etc.) are
@@ -116,9 +116,10 @@ func runKweli(cmd *cobra.Command, args []string) error {
 		os.Exit(2)
 	}
 
-	// Check Phase 3 (still unimplemented — refuse rather than pretend).
-	if expect != "" {
-		fmt.Fprintf(os.Stderr, "--expect is not implemented yet (Phase 3)\n")
+	// Validate --expect (Phase 3). "us-core" is the only table kweli
+	// ships; refuse anything else rather than silently ignoring it.
+	if expect != "" && expect != "us-core" {
+		fmt.Fprintf(os.Stderr, "Error: unknown --expect %q (only \"us-core\" is implemented)\n", expect)
 		os.Exit(2)
 	}
 
@@ -215,6 +216,7 @@ func runKweli(cmd *cobra.Command, args []string) error {
 		Concurrency:     concurrency,
 		ProbeOperations: probeOperations,
 		Seed:            0,
+		Expect:          expect,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "probe run failed: %v\n", err)
@@ -265,6 +267,10 @@ func parseFailOn(s string) (map[string]bool, error) {
 		"ignored":  true,
 		"paging":   true,
 		"untested": true,
+		// "missing" only ever produces findings under --expect (Phase 3);
+		// listing it here is harmless when --expect isn't set (there will
+		// simply never be a finding in that category to match).
+		"missing": true,
 	}
 
 	if s == "" {

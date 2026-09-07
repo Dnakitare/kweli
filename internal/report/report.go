@@ -111,11 +111,22 @@ func Text(w io.Writer, r *model.Report, color bool) error {
 		}
 	}
 
+	// MISSING section (only ever populated under --expect, Phase 3)
+	missing := filterByMissing(r.Findings)
+	if len(missing) > 0 {
+		fmt.Fprintf(w, "\n%s\n", colorize(fmt.Sprintf("MISSING (%d)", len(missing)), "35"))
+		for _, f := range missing {
+			fmt.Fprintf(w, "  %s  %s\n", f.Claim, f.Detail)
+		}
+	}
+
 	// Final summary line
 	durationStr := r.Timing.Duration.Round(time.Second).String()
-	fmt.Fprintf(w, "\nClaims %d · Verified %d · Lies %d · Untested %d · %s · %d requests\n",
-		r.Summary.Claims, r.Summary.Verified, r.Summary.Lies, r.Summary.Untested,
-		durationStr, r.Timing.Requests)
+	fmt.Fprintf(w, "\nClaims %d · Verified %d · Lies %d · Untested %d", r.Summary.Claims, r.Summary.Verified, r.Summary.Lies, r.Summary.Untested)
+	if r.Summary.Missing > 0 {
+		fmt.Fprintf(w, " · Missing %d", r.Summary.Missing)
+	}
+	fmt.Fprintf(w, " · %s · %d requests\n", durationStr, r.Timing.Requests)
 
 	return nil
 }
@@ -177,11 +188,27 @@ func Markdown(w io.Writer, r *model.Report) error {
 		}
 	}
 
+	// Missing section (only ever populated under --expect, Phase 3)
+	fmt.Fprintf(w, "\n### Missing\n\n")
+	missing := filterByMissing(r.Findings)
+	if len(missing) == 0 {
+		fmt.Fprintf(w, "_None._\n")
+	} else {
+		fmt.Fprintf(w, "| Claim | Detail |\n")
+		fmt.Fprintf(w, "|-------|--------|\n")
+		for _, f := range missing {
+			fmt.Fprintf(w, "| %s | %s |\n",
+				escapeMarkdown(f.Claim), escapeMarkdown(f.Detail))
+		}
+	}
+
 	// Final summary line
 	durationStr := r.Timing.Duration.Round(time.Second).String()
-	fmt.Fprintf(w, "\n---\n\nClaims %d · Verified %d · Lies %d · Untested %d · %s · %d requests\n",
-		r.Summary.Claims, r.Summary.Verified, r.Summary.Lies, r.Summary.Untested,
-		durationStr, r.Timing.Requests)
+	fmt.Fprintf(w, "\n---\n\nClaims %d · Verified %d · Lies %d · Untested %d", r.Summary.Claims, r.Summary.Verified, r.Summary.Lies, r.Summary.Untested)
+	if r.Summary.Missing > 0 {
+		fmt.Fprintf(w, " · Missing %d", r.Summary.Missing)
+	}
+	fmt.Fprintf(w, " · %s · %d requests\n", durationStr, r.Timing.Requests)
 
 	return nil
 }
@@ -226,6 +253,16 @@ func filterByUntested(findings []model.Finding) []model.Finding {
 	var result []model.Finding
 	for _, f := range findings {
 		if f.Status.IsUntestedCategory() {
+			result = append(result, f)
+		}
+	}
+	return result
+}
+
+func filterByMissing(findings []model.Finding) []model.Finding {
+	var result []model.Finding
+	for _, f := range findings {
+		if f.Status == model.StatusMissing {
 			result = append(result, f)
 		}
 	}

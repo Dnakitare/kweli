@@ -15,6 +15,7 @@ import (
 
 	"github.com/Dnakitare/kweli/internal/capstmt"
 	"github.com/Dnakitare/kweli/internal/client"
+	"github.com/Dnakitare/kweli/internal/expect"
 	"github.com/Dnakitare/kweli/internal/model"
 )
 
@@ -34,6 +35,12 @@ type Options struct {
 	// Seed makes nonsense-value suffixes reproducible (tests pass a fixed
 	// seed; main.go can pass 0 to mean "use time.Now()").
 	Seed int64
+	// Expect opts into brief Phase 3's expectation mode. The only value
+	// currently understood is "us-core"; empty means off. Unlike every
+	// other probe, this is a pure comparison against the CapabilityStatement
+	// already fetched — no network request, unaffected by Resources or
+	// budget expiry.
+	Expect string
 }
 
 func (o Options) rngSeed() int64 {
@@ -128,6 +135,15 @@ func Run(ctx context.Context, cs *capstmt.CapabilityStatement, cl *client.Client
 	report.Findings = append(report.Findings, sysFindings...)
 	report.Warnings = append(report.Warnings, sysWarnings...)
 
+	// Phase 3 expectation mode (§ Phase 3): a static comparison against
+	// the CapabilityStatement already fetched, not a probe — runs against
+	// the full cs regardless of opts.Resources, since "is this US-Core-
+	// required param claimed at all" isn't something a --resources filter
+	// should be able to silently hide.
+	if opts.Expect == "us-core" {
+		report.Findings = append(report.Findings, expect.Check(cs)...)
+	}
+
 	sort.SliceStable(report.Findings, func(i, j int) bool {
 		return report.Findings[i].ID < report.Findings[j].ID
 	})
@@ -148,8 +164,14 @@ func Run(ctx context.Context, cs *capstmt.CapabilityStatement, cl *client.Client
 
 func summarize(findings []model.Finding) model.Summary {
 	var s model.Summary
-	s.Claims = len(findings)
 	for _, f := range findings {
+		if f.Status == model.StatusMissing {
+			// Not a "claim" the server made — deliberately excluded from
+			// Claims (see model.Summary's doc comment).
+			s.Missing++
+			continue
+		}
+		s.Claims++
 		switch {
 		case f.Status.IsLie():
 			s.Lies++

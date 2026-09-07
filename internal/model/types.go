@@ -22,6 +22,10 @@ const (
 	KindCount      Kind = "count"
 	KindHistory    Kind = "history"
 	KindOperation  Kind = "operation"
+	// KindMissing is produced by internal/expect (--expect us-core, Phase
+	// 3), not by any probe: it's a static comparison against a table, not
+	// something exercised against the live server.
+	KindMissing Kind = "missing"
 )
 
 // Status is the verdict for a single claim.
@@ -35,6 +39,13 @@ const (
 	StatusIgnoredPartial Status = "ignored (partial)"
 	StatusUntested       Status = "untested"
 	StatusInconclusive   Status = "inconclusive"
+	// StatusMissing is the fourth finding class from brief Phase 3
+	// (--expect us-core): a search param or resource type US Core requires
+	// that the CapabilityStatement never claims at all. Distinct in kind
+	// from IsLie() (the server never claimed it, so it never lied about
+	// it) and from IsUntestedCategory() (kweli isn't uncertain here — the
+	// comparison against the table is definitive).
+	StatusMissing Status = "missing"
 )
 
 // IsLie reports whether a status represents a claim the server did not
@@ -68,14 +79,20 @@ func (s Status) IsUntestedCategory() bool {
 }
 
 // FailOnCategory maps a Status to one of the --fail-on bucket names:
-// "rejected", "ignored", "paging", "untested". Only StatusVerified returns
-// "" (fully confirmed, nothing to flag).
+// "rejected", "ignored", "paging", "untested", or (only ever produced
+// under --expect) "missing". Only StatusVerified returns "" (fully
+// confirmed, nothing to flag). "missing" isn't in the brief's literal
+// --fail-on list (written before Phase 3 existed) but is the obvious
+// extension: a required-but-unclaimed param is exactly the kind of thing
+// --fail-on exists to catch in CI, once a user has opted into --expect.
 func (s Status) FailOnCategory() string {
 	switch {
 	case s == StatusRejected:
 		return "rejected"
 	case s == StatusIgnored || s == StatusIgnoredPartial:
 		return "ignored"
+	case s == StatusMissing:
+		return "missing"
 	case s.IsUntestedCategory():
 		return "untested"
 	default:
@@ -123,12 +140,16 @@ type ResourceSummary struct {
 	Untested int    `json:"untested"`
 }
 
-// Summary is the one-line totals footer.
+// Summary is the one-line totals footer. Missing is only ever non-zero
+// under --expect (Phase 3) and is deliberately excluded from Claims — a
+// required-but-unclaimed param was never a claim the server made, so it's
+// not something kweli "tested" the way the other buckets are.
 type Summary struct {
 	Claims   int `json:"claims"`
 	Verified int `json:"verified"`
 	Lies     int `json:"lies"`
 	Untested int `json:"untested"`
+	Missing  int `json:"missing,omitempty"`
 }
 
 // Timing records how long the run took and how much traffic it generated.

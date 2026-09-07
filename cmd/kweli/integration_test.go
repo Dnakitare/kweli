@@ -169,6 +169,68 @@ func TestIntegration_SMARTBackendRequiresClientIDAndJWK(t *testing.T) {
 	}
 }
 
+func TestIntegration_ExpectUSCore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	bin := buildKweli(t)
+	srv := testserver.New()
+	defer srv.Close()
+
+	// --expect us-core is opt-in and produces "missing" findings the
+	// default --fail-on (rejected,ignored) doesn't catch, so a plain run
+	// should still exit 1 for the fixture's planted lies — but the report
+	// itself must carry the missing findings, and asking --fail-on to
+	// catch them specifically should still exit 1 too.
+	var stdout, stderr bytes.Buffer
+	cmd := exec.Command(bin, srv.URL, "--expect", "us-core", "--format", "json", "--no-color", "--resources", "Coverage")
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if _, ok := err.(*exec.ExitError); !ok {
+			t.Fatalf("running kweli: %v (stderr: %s)", err, stderr.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), `"missing"`) {
+		t.Errorf("stdout doesn't mention any missing findings (stdout: %s) (stderr: %s)", stdout.String(), stderr.String())
+	}
+
+	var stdout2, stderr2 bytes.Buffer
+	cmd2 := exec.Command(bin, srv.URL, "--expect", "us-core", "--fail-on", "missing", "--format", "text", "--no-color", "--resources", "Coverage")
+	cmd2.Stdout = &stdout2
+	cmd2.Stderr = &stderr2
+	err := cmd2.Run()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected kweli to exit non-zero with --fail-on missing against this fixture, got: %v (stdout: %s)", err, stdout2.String())
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("exit code = %d, want 1", exitErr.ExitCode())
+	}
+	if !strings.Contains(stdout2.String(), "MISSING") {
+		t.Errorf("text output missing the MISSING section: %s", stdout2.String())
+	}
+}
+
+func TestIntegration_ExpectRejectsUnknownTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in -short mode")
+	}
+	bin := buildKweli(t)
+
+	var stderr bytes.Buffer
+	cmd := exec.Command(bin, "https://example.org/r4", "--expect", "not-a-real-table")
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected a non-zero exit for an unknown --expect table, got: %v", err)
+	}
+	if exitErr.ExitCode() != 2 {
+		t.Errorf("exit code = %d, want 2 (config failure before probing)", exitErr.ExitCode())
+	}
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }

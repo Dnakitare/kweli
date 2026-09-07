@@ -49,7 +49,7 @@ clean empty result or a `400` is the kind of thing an integration engineer
 finds by hand with curl an hour into writing a client — kweli finds it in
 under three minutes, unattended, with a CI-friendly exit code attached.
 
-## Status: Phase 1 (core) + Phase 2 (SMART Backend Services auth) complete
+## Status: Phase 1 (core) + Phase 2 (SMART auth) + Phase 3 (--expect us-core) complete
 
 ```
 go build -o kweli ./cmd/kweli
@@ -92,6 +92,27 @@ Implemented:
   (`bulk-data.smarthealthit.org`), and its `/auth/token` endpoint verified
   a real RS384-signed assertion built by this code and issued a genuine
   access token — the brief's own Phase 2 validation step (§6).
+- **`--expect us-core`** adds a fourth finding class, `missing`: a search
+  param (or whole resource type) US Core 6.1 requires that the
+  CapabilityStatement never claims at all — a static comparison
+  (`internal/expect`), not a probe, so it costs no extra requests. The
+  table is sourced directly from US Core 6.1.0's own reference
+  CapabilityStatement (not hand-transcribed from the narrative spec),
+  taking the union of individually-mandatory search params and params
+  referenced inside mandatory *combination* requirements — most US Core
+  resources (Observation, CarePlan, MedicationRequest, ...) mark every
+  individual param only "should"/"may" and express the real requirement as
+  a combination like `patient+category`, so using only individually-
+  mandatory params would make the table nearly useless for exactly the
+  resources people care about most. What it deliberately does not check:
+  whether a server supports those params search *together* — only that
+  each one is individually claimed (see `internal/expect/table.go`'s doc
+  comment; this is the brief's own "just a table; no IG parsing" scope).
+  Validated both offline (`internal/expect/check_test.go`, plus an
+  acceptance test reusing the Phase 1 fixture) and against real data: run
+  against HAPI's public sandbox's actual CapabilityStatement, it reports
+  zero missing findings — the same "expect it to pass almost everything"
+  control as Phase 1's own HAPI validation.
 
 ## Tracked debt (named explicitly, not hidden)
 
@@ -101,8 +122,6 @@ Implemented:
   `$export` safely (and cancelling it) against a real production server is
   real engineering, not a Phase 1 shortcut — deferred on purpose. Flag
   exists so `--help` documents the future shape.
-- **`--expect us-core` (Phase 3 "missing param" detection) is not
-  implemented.** Same refusal-not-pretense treatment.
 - The curated search-param path table (`internal/sample/paths.go`) covers
   ~125 params across 26 resource types — the common base params plus
   most of US Core's clinical and administrative resources (Patient,
@@ -129,6 +148,7 @@ internal/client/     http client: auth, rate limit, retry, redaction
 internal/smart/      SMART Backend Services: JWK loading, private_key_jwt, token discovery/exchange/caching
 internal/probe/      one file per probe kind (search, include, paging, read, count, system)
 internal/sample/     sample-resource fetch + curated path table (two-query test)
+internal/expect/     --expect us-core: US Core 6.1 required-param table + comparison (Phase 3)
 internal/report/     text/json/markdown renderers
 internal/testserver/ httptest fake server with planted lies + truthful control, plus a SMART auth fixture
 ```
