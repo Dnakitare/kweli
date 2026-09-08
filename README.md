@@ -1,5 +1,7 @@
 # kweli
 
+[![CI](https://github.com/Dnakitare/kweli/actions/workflows/ci.yml/badge.svg)](https://github.com/Dnakitare/kweli/actions/workflows/ci.yml)
+
 FHIR CapabilityStatement truth-tester. Point it at a FHIR base URL and it
 reads `/metadata`, then actually exercises every claim in the
 CapabilityStatement — resource types, interactions, search parameters,
