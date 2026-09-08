@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,14 @@ import (
 func buildKweli(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "kweli")
+	name := "kweli"
+	if runtime.GOOS == "windows" {
+		// exec.Command needs the real extension on Windows — unlike
+		// LookPath's PATH search, running an exact path doesn't try
+		// appending .exe for you.
+		name += ".exe"
+	}
+	bin := filepath.Join(dir, name)
 	goBin := "go"
 	if _, err := exec.LookPath("/opt/homebrew/bin/go"); err == nil {
 		goBin = "/opt/homebrew/bin/go"
