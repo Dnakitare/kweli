@@ -19,14 +19,21 @@ import (
 	"github.com/Dnakitare/kweli/internal/smart"
 )
 
+// version is set at build time via -ldflags "-X main.version=..." (see
+// .goreleaser.yml); "dev" is what `go build`/`go run` without that flag
+// produces, which is also the correct answer for a `go install` from a
+// commit that isn't a tagged release.
+var version = "dev"
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "kweli <base-url>",
 		Short: "FHIR CapabilityStatement truth-tester",
 		Long: "kweli probes a FHIR server's CapabilityStatement to verify that claimed " +
 			"capabilities actually work.",
-		Args: cobra.ExactArgs(1),
-		RunE: runKweli,
+		Version: version,
+		Args:    cobra.ExactArgs(1),
+		RunE:    runKweli,
 	}
 
 	// Flags
