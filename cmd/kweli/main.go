@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -20,10 +21,24 @@ import (
 )
 
 // version is set at build time via -ldflags "-X main.version=..." (see
-// .goreleaser.yml); "dev" is what `go build`/`go run` without that flag
-// produces, which is also the correct answer for a `go install` from a
-// commit that isn't a tagged release.
+// .goreleaser.yml) for release binaries. For a `go install
+// .../kweli@v0.1.0`, ldflags never runs — but the Go toolchain still
+// records the resolved module version in the binary's build info, so
+// init() below recovers it from there instead of falling back to the
+// less useful "dev" for what's actually a perfectly well-defined install.
+// "dev" remains correct for a plain `go build`/`go run`, or a `go
+// install` off a commit that isn't a tagged release (debug.ReadBuildInfo
+// reports "(devel)" for those).
 var version = "dev"
+
+func init() {
+	if version != "dev" {
+		return // already set via -ldflags
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		version = bi.Main.Version
+	}
+}
 
 func main() {
 	rootCmd := &cobra.Command{
