@@ -20,7 +20,11 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      # .Tag (not .Version) so this matches what `go install .../kweli@v0.1.1`
+      # reports via runtime/debug.ReadBuildInfo (main.go's init()) — both
+      # keep the "v" prefix, so every distribution channel prints the same
+      # version string.
+      - -s -w -X main.version={{.Tag}}
 
 archives:
   - id: kweli
