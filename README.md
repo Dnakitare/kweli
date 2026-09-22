@@ -51,7 +51,27 @@ clean empty result or a `400` is the kind of thing an integration engineer
 finds by hand with curl an hour into writing a client — kweli finds it in
 under three minutes, unattended, with a CI-friendly exit code attached.
 
-## Status: Phase 1 (core) + Phase 2 (SMART auth) + Phase 3 (--expect us-core) complete
+## Install
+
+```
+brew install dnakitare/tap/kweli               # Homebrew (builds from source)
+go install github.com/Dnakitare/kweli/cmd/kweli@latest   # go install
+```
+
+Or grab a prebuilt binary (darwin/linux/windows, amd64/arm64) from the
+[releases page](https://github.com/Dnakitare/kweli/releases).
+
+In CI, use the [GitHub Action](https://github.com/Dnakitare/kweli-action)
+instead of installing kweli by hand:
+
+```yaml
+- uses: Dnakitare/kweli-action@v1
+  with:
+    url: https://hapi.fhir.org/baseR4
+    fail-on: rejected,ignored
+```
+
+## Status: Phase 1 (core) + Phase 2 (SMART auth) + Phase 3 (--expect us-core) + Phase 4 (distribution) complete
 
 ```
 go build -o kweli ./cmd/kweli
@@ -115,6 +135,17 @@ Implemented:
   against HAPI's public sandbox's actual CapabilityStatement, it reports
   zero missing findings — the same "expect it to pass almost everything"
   control as Phase 1's own HAPI validation.
+- **Phase 4 distribution**: [goreleaser](.goreleaser.yml) cross-compiles
+  darwin/linux/windows × amd64/arm64 static binaries to GitHub Releases on
+  every `v*` tag; a [Homebrew formula](https://github.com/Dnakitare/homebrew-tap)
+  builds from source (same pattern as this account's other Go CLI tools —
+  no prebuilt-binary/cross-repo-token plumbing needed just for brew);
+  `go install` works off the tagged module; and the
+  [GitHub Action](https://github.com/Dnakitare/kweli-action) wraps all of
+  that into a `uses:` step. CI (`.github/workflows/ci.yml`) runs
+  gofmt/vet/build/test with `-race` across all three target OSes on every
+  push — caught a real Windows-only bug (a test binary missing `.exe`) on
+  its first run. See [RELEASING.md](RELEASING.md) for the release process.
 
 ## Tracked debt (named explicitly, not hidden)
 
